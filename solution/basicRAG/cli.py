@@ -1,5 +1,5 @@
 import typer
-from basicRAG import basicRAG
+from solution.basicRAG.basicRAGLlamaIndex import basicRAG
 
 
 app = typer.Typer()
