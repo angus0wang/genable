@@ -1,20 +1,21 @@
-from langchain.llms import HuggingFaceHub
+
 from langchain.vectorstores import Redis
-from langchain.chains import RAGChain
-from langchain.prompts import RAGPromptTemplate
-from langchain.llms.huggingface_hub import HuggingFaceHubLoader
-from solution.basicRAG.basicRAGLlamaIndex import basicRAG
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings, HuggingFaceEndpoint
-from langchain.retrievers import SentenceTransformerRerank
-TGI_endpoint_url="your_endpoint_url"
+from langchain.retrievers import ContextualCompressionRetriever
+from langchain.retrievers.document_compressors import CrossEncoderReranker
+from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+from langchain_community.document_loaders import TextLoader
 
+TGI_endpoint_url="http://127.0.0.1:9009"
+redis_url = "redis://localhost:6379"
 
-class basicRAGLangchain:
-    def __init__(self, documents_path: str, model_name: str = "llama3:70b", db_path: str = "./chroma_db", model_temperature: float = 0.3, collection_name: str = "rag_collection"):
+class BasicRAGLangchain:
+    def __init__(self, documents_path: str, model_name: str = "llama3:70b", db_path: str = "./chroma_db", model_temperature: float = 0.3, dateset_name: str = "rag_collection"):
         self.documents_path = documents_path
         self.model_name = model_name
         self.db_path = db_path
-        self.collection_name = collection_name
+        self.dateset_name = dateset_name
         self.llm = HuggingFaceEndpoint(
             endpoint_url=f"{TGI_endpoint_url}"
         )
@@ -23,72 +24,37 @@ class basicRAGLangchain:
         self.index = None
         self.query_engine = None
         self.chroma_client = None
-        self.reranker = SentenceTransformerRerank(
-            model="BAAI/bge-reranker-base", top_n=5
-        )
-        self.markdown_parser = MarkdownNodeParser()
+        self.reranker = HuggingFaceCrossEncoder(model_name="BAAI/bge-reranker-base")
+        self.document_parser = RecursiveCharacterTextSplitter()
 
     def load_documents(self):
-        # self.documents = SimpleDirectoryReader(
-        #     self.documents_path,
-        #     file_extractor={
-        #         ".md": self.markdown_parser
-        #     },
-        #     filename_as_id=True,
-        #     required_exts=[".md"],
-        #     file_metadata={
-        #         ".*README\.md": {"is_readme": True}
-        #     }
-        # ).load_data()
-        reader = SimpleDirectoryReader(input_dir=self.documents_path, required_exts=[".md"], recursive=True)
-        # all_docs = []
-        # for docs in reader.iter_data():
-        #     # <do something with the documents per file>
-        #     all_docs.extend(docs)
-        docs = reader.load_data()
-        parser = MarkdownNodeParser()
-        nodes = parser.get_nodes_from_documents(docs)
-        self.documents = []
-        for doc in nodes:
-            temp = Document(text=doc.text, metadata=doc.metadata)
-            self.documents.append(Document(text=doc.text, metadata=doc.metadata))
+        docs = TextLoader(self.documents_path).load()
+        text_splitter = self.document_parser(chunk_size=200, chunk_overlap=30)
+        self.documents = text_splitter.split_documents(docs)
 
     def create_index(self):
-        self.chroma_client = PersistentClient(path=self.db_path)
-    
-        if self.chroma_client.get_collection(self.collection_name).count() > 0:
-            print("Loading existing index from ChromaDB...")
-            chroma_collection = self.chroma_client.get_collection(self.collection_name)
-            vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
-            self.index = VectorStoreIndex.from_documents(
-                vector_store, embed_model=self.embed_model
-            )
-        else:
-            print("Creating new index...")
-            if not self.documents:
-                self.load_documents()
-            chroma_collection = self.chroma_client.get_or_create_collection(self.collection_name)
-            vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
-            storage_context = StorageContext.from_defaults(vector_store=vector_store)
-            self.index = VectorStoreIndex.from_documents(
-                self.documents, storage_context=storage_context, embed_model=self.embed_model
-            )
-            # self.chroma_client.persist()
+        self.index = Redis.from_texts(
+            self.documents,
+            self.embed_model,
+            redis_url=redis_url,
+            index_name=self.dateset_name,
+        )
 
     def setup_query_engine(self):
         if not self.index:
             self.create_index()
-        retriever = VectorIndexRetriever(index=self.index, similarity_top_k=20)
-        self.query_engine = RetrieverQueryEngine.from_args(
-            retriever,
-            node_postprocessors=[self.reranker],
-            llm=self.llm
+
+        retriever = self.index.as_retriever(search_type="similarity", search_kwargs={"k": 20})
+        # model = HuggingFaceCrossEncoder(model_name="BAAI/bge-reranker-base")
+        compressor = CrossEncoderReranker(model=self.reranker, top_n=5)
+        self.query_engine = ContextualCompressionRetriever(
+            base_compressor=compressor, base_retriever=retriever
         )
 
     def query(self, question: str) -> str:
         if not self.query_engine:
             self.setup_query_engine()
-        response = self.query_engine.query(question)
+        response = self.query_engine.invoke(question)
         return str(response)
 
     def update_documents(self, new_documents_path: str):
@@ -100,11 +66,6 @@ class basicRAGLangchain:
         self.create_index()
         self.setup_query_engine()
 
-    def change_model(self, new_model_name: str):
-        self.model_name = new_model_name
-        self.llm = Ollama(model=new_model_name)
-        self.query_engine = None
-        self.setup_query_engine()
 
     def clear_db(self):
         if os.path.exists(self.db_path):
