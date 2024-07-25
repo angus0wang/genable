@@ -85,6 +85,7 @@ class basicRAG:
             node_postprocessors=[self.reranker],
             llm=self.llm
         )
+        # self.query_engine.text_qa_template
 
     def query(self, question: str) -> str:
         if not self.query_engine:
