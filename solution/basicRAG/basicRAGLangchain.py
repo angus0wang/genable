@@ -56,7 +56,7 @@ class BasicRAGLangchain:
             self.index = Redis.from_existing_index(
                 embedding=self.embed_model,
                 index_name=self.dateset_name,
-                # schema="./solution/basicRAG/schema.yml",
+                schema="./solution/basicRAG/schema.yml",
                 redis_url=redis_url
             )
         else:
@@ -69,7 +69,7 @@ class BasicRAGLangchain:
                 embedding=self.embed_model,
                 redis_url=redis_url,
                 index_name=self.dateset_name,
-                # index_schema="./solution/basicRAG/schema.yml",
+                index_schema="./solution/basicRAG/schema.yml",
             )
 
 

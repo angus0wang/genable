@@ -1,11 +1,10 @@
 text:
-- name: content
 - name: source
-numeric:
-- name: start_index
+- name: content
 vector:
 - name: content_vector
   algorithm: HNSW
   datatype: FLOAT32
-  dims: 384
+  dims: 768
   distance_metric: COSINE
+
